@@ -29,6 +29,7 @@ import androidx.compose.material3.TopAppBarDefaults.topAppBarColors
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,9 +38,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import br.edu.satc.todolistcompose.AppDatabase
 import br.edu.satc.todolistcompose.TaskData
+import br.edu.satc.todolistcompose.TaskEntity
 import br.edu.satc.todolistcompose.ui.components.TaskCard
 import kotlinx.coroutines.launch
 
@@ -47,108 +51,57 @@ import kotlinx.coroutines.launch
 @Preview(showBackground = true)
 @Composable
 fun HomeScreen() {
+    val context = LocalContext.current
+    val db = remember { AppDatabase.getDatabase(context) }
+    val dao = db.taskDao()
 
-    // states by remember
-    // Guardam valores importantes de controle em nossa home
     var showBottomSheet by remember { mutableStateOf(false) }
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
+    val scope = rememberCoroutineScope()
 
-    /**
-     * O componente Scaffold facilita a construção de telas seguindo as guidelines
-     * do Google / Android / Material Design 3.
-     * Com ele podemos facilmente incluir uma TopBar, BottomBar, FAB, etc.
-     */
+    var taskList by remember { mutableStateOf(listOf<TaskEntity>()) }
+
+    // Carrega as tarefas do banco na inicialização
+    LaunchedEffect(Unit) {
+        taskList = dao.getAll()
+    }
+
     Scaffold(
-
-        /**
-         * Aqui informamos como desejamos o comportamento da Tela quando
-         * for realizado um "scroll" na lista
-         * */
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-
-        /**
-         * Aqui declaramos nossa Top Bar e o conteúdo dela
-         * */
         topBar = {
             TopAppBar(
-                colors = topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.primary,
-                ),
-                title = { Text(text = "ToDoList UniSATC") },
-                actions =
-                {
-                    /**
-                     * Este é o botão de Settings que aparece no canto direito da TopBar
-                     * Podemos usar ele para acessar alguma configuração do App.
-                     * * */
-                    IconButton(onClick = { /* do something */ }) {
-                        Icon(
-                            Icons.Rounded.Settings,
-                            contentDescription = ""
-                        )
-                    }
-                },
-                /**
-                 * Aplicamos um comportamento para o scroll da TopBar
-                 * Neste caso, queremos que ela fique fixa.
-                 * TopAppBarDefaults.pinnedScrollBehavior
-                 */
+                title = { Text("ToDoList UniSATC") },
                 scrollBehavior = scrollBehavior
             )
         },
-
-        /**
-         * Aqui nosso FAB (Float Action Button).
-         * Ele sempre fica ao pé da tela, a direita. Serve para disparar a ação principal da tela.
-         * Neste caso, vamos usar para criar uma nova Task. Portanto ao clicar no button,
-         * chamamos nosso "bottom sheet" que cria uma nova Task.
-         */
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 text = { Text("Nova tarefa") },
                 icon = { Icon(Icons.Filled.Add, contentDescription = "") },
-                onClick = {
-                    showBottomSheet = true
-                }
+                onClick = { showBottomSheet = true }
             )
         }
     ) { innerPadding ->
-        /**
-         * Aqui exibimos o conteúdo da tela.
-         * O que aparece no "meio".
-         * Para ficar mais organizado, montei o conteúdo em functions separadas.
-         * */
-        HomeContent(innerPadding)
-        NewTask(showBottomSheet = showBottomSheet) { showBottomSheet = false }
-
+        HomeContent(taskList, innerPadding)
+        NewTask(showBottomSheet = showBottomSheet) { title, description ->
+            scope.launch {
+                val newTask = TaskEntity(title = title, description = description, complete = false)
+                dao.insert(newTask)
+                taskList = dao.getAll()
+            }
+            showBottomSheet = false
+        }
     }
 }
 
 @Composable
-fun HomeContent(innerPadding: PaddingValues) {
-
-    val tasks = mutableListOf<TaskData>()
-    for (i in 0..5) {
-        tasks.add(TaskData("Tarefa " + i, "Descricao " + i, i % 2 == 0))
-    }
-
-    /**
-     * Aqui simplesmente temos uma Column com o nosso conteúdo.
-     * A chamada verticalScroll(rememberScrollState()), passada para o Modifier,
-     * avisa que o conteúdo será uma lista que pode precisar de scroll nessa tela.
-     *
-     * TaskCard exibe o conteúdo de uma tarefa. O conteúdo pode ser passado na chamada da function
-     */
-
+fun HomeContent(tasks: List<TaskEntity>, innerPadding: PaddingValues) {
     Column(
         modifier = Modifier
             .padding(horizontal = 4.dp)
             .padding(top = innerPadding.calculateTopPadding())
             .fillMaxSize()
-            .verticalScroll(
-                rememberScrollState()
-            ),
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.Top
     ) {
         for (task in tasks) {
@@ -157,52 +110,47 @@ fun HomeContent(innerPadding: PaddingValues) {
     }
 }
 
+
 /**
  * NewTask abre uma janela estilo "modal". No Android conhecida por BottomSheet.
  * Aqui podemos "cadastrar uma nova Task".
  */
 @Composable
-fun NewTask(showBottomSheet: Boolean, onComplete: () -> Unit) {
+fun NewTask(showBottomSheet: Boolean, onSave: (String, String) -> Unit) {
     val sheetState = rememberModalBottomSheetState()
     val scope = rememberCoroutineScope()
-    var taskTitle by remember {
-        mutableStateOf("")
-    }
-    var taskDescription by remember {
-        mutableStateOf("")
-    }
+    var taskTitle by remember { mutableStateOf("") }
+    var taskDescription by remember { mutableStateOf("") }
 
     if (showBottomSheet) {
         ModalBottomSheet(
-            onDismissRequest = {
-                onComplete()
-            },
+            onDismissRequest = {},
             sheetState = sheetState,
-
-            ) {
-            // Sheet content
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 24.dp),
+                    .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-
                 OutlinedTextField(
                     value = taskTitle,
-                    onValueChange = {taskTitle = it},
-                    label = { Text(text = "Título da tarefa") })
+                    onValueChange = { taskTitle = it },
+                    label = { Text("Título da tarefa") }
+                )
                 OutlinedTextField(
                     value = taskDescription,
-                    onValueChange = {taskDescription = it},
-                    label = { Text(text = "Descrição da tarefa") })
-                Button(modifier = Modifier.padding(top = 4.dp), onClick = {
-                    scope.launch { sheetState.hide() }.invokeOnCompletion {
-                        if (!sheetState.isVisible) {
-                            onComplete()
+                    onValueChange = { taskDescription = it },
+                    label = { Text("Descrição da tarefa") }
+                )
+                Button(
+                    modifier = Modifier.padding(top = 8.dp),
+                    onClick = {
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            onSave(taskTitle, taskDescription)
                         }
                     }
-                }) {
+                ) {
                     Text("Salvar")
                 }
             }
